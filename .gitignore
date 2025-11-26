@@ -26,9 +26,11 @@ report.[0-9]_.[0-9]_.[0-9]_.[0-9]_.json
 .eslintcache
 .cache
 *.tsbuildinfo
+README.md
+
 
 # IntelliJ based IDEs
 .idea
-
+pages/*
 # Finder (MacOS) folder config
 .DS_Store

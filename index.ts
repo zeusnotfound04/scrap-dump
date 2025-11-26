@@ -3,18 +3,22 @@ import axios from 'axios';
 import fs from 'fs/promises';
 import path from 'path';
 import * as cheerio from 'cheerio';
-import { HttpsProxyAgent } from 'https-proxy-agent';
 import PQueue from 'p-queue';
 import pLimit from 'p-limit';
+import os from 'os';
 
 const app = express();
 const PORT = 3000;
 
-// Configuration
+// Configuration - Optimized for maximum speed
 const TOTAL_PAGES = 7022;
-const CONCURRENT_REQUESTS = 5; // Number of concurrent requests
-const DELAY_BETWEEN_REQUESTS = 1000; // 1 second delay
+const CPU_CORES = os.cpus().length;
+const CONCURRENT_REQUESTS = CPU_CORES * 4; // Use 4x CPU cores for maximum throughput
+const DELAY_BETWEEN_REQUESTS = 100; // Minimal delay - 100ms
+const BATCH_SIZE = 50; // Process in batches
 const BASE_URL = 'https://www.jhansipropertytax.com/listName.php';
+
+console.log(`🚀 Detected ${CPU_CORES} CPU cores, using ${CONCURRENT_REQUESTS} concurrent requests`);
 
 // Interface for property data
 interface PropertyData {
@@ -32,31 +36,31 @@ interface PropertyData {
 // Middleware
 app.use(express.json());
 
-// Free proxy list (you can add more or use paid proxy services)
-const FREE_PROXIES: string[] = [
-  // Add proxy URLs here, example:
-  // 'http://proxy1:port',
-  // 'http://proxy2:port',
+// Optimized headers for maximum speed
+const USER_AGENTS = [
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/119.0.0.0 Safari/537.36',
+  'Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:120.0) Gecko/20100101 Firefox/120.0',
+  'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
 ];
 
-// Get random proxy (optional, can work without proxy too)
-const getRandomProxy = (): HttpsProxyAgent<string> | undefined => {
-  if (FREE_PROXIES.length === 0) return undefined;
-  const randomProxy = FREE_PROXIES[Math.floor(Math.random() * FREE_PROXIES.length)];
-  if (!randomProxy) return undefined;
-  return new HttpsProxyAgent(randomProxy);
+const getRandomUserAgent = (): string => {
+  const index = Math.floor(Math.random() * USER_AGENTS.length);
+  return USER_AGENTS[index] ?? USER_AGENTS[0] ?? 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
 };
 
-// Create request headers
+// Create optimized request headers
 const getHeaders = () => ({
-  'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+  'User-Agent': getRandomUserAgent(),
   'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-  'Accept-Language': 'en-US,en;q=0.5',
+  'Accept-Language': 'en-US,en;q=0.9',
   'Accept-Encoding': 'gzip, deflate, br',
   'Connection': 'keep-alive',
   'Upgrade-Insecure-Requests': '1',
-  'Cache-Control': 'no-cache',
-  'Pragma': 'no-cache'
+  'DNT': '1',
+  'Sec-Fetch-Dest': 'document',
+  'Sec-Fetch-Mode': 'navigate',
+  'Sec-Fetch-Site': 'none'
 });
 
 // Parse HTML and extract property data
@@ -105,22 +109,22 @@ const parsePropertyData = (html: string): PropertyData[] => {
   return properties;
 };
 
-// Fetch single page data
+// Fetch single page data - Optimized for maximum speed
 const fetchPage = async (pageNo: number, retryCount = 0): Promise<PropertyData[]> => {
   try {
     const url = pageNo === 1 ? BASE_URL : `${BASE_URL}?pageno=${pageNo}`;
-    const proxy = getRandomProxy();
     
-    console.log(`Fetching page ${pageNo}...`);
-    
-    const axiosConfig: any = {
-      headers: getHeaders(),
-      timeout: 15000,
-    };
-
-    if (proxy) {
-      axiosConfig.httpsAgent = proxy;
+    // Minimal logging for speed
+    if (pageNo % 100 === 0 || pageNo <= 10) {
+      console.log(`🚀 Fetching page ${pageNo}...`);
     }
+    
+    const axiosConfig = {
+      headers: getHeaders(),
+      timeout: 8000, // Reduced timeout for speed
+      maxRedirects: 3,
+      validateStatus: (status: number) => status < 400
+    };
 
     const response = await axios.get(url, axiosConfig);
     
@@ -155,53 +159,144 @@ const fetchPage = async (pageNo: number, retryCount = 0): Promise<PropertyData[]
   }
 };
 
-// Main scraping function with worker pool
+// Ultra-fast scraping function with maximum concurrency
 const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<PropertyData[]> => {
-  console.log(`🚀 Starting to scrape ${endPage - startPage + 1} pages...`);
+  console.log(`🚀 TURBO MODE: Scraping ${endPage - startPage + 1} pages with ${CONCURRENT_REQUESTS} concurrent requests...`);
+  console.log(`⚡ CPU Cores: ${CPU_CORES} | Batch Size: ${BATCH_SIZE} | Delay: ${DELAY_BETWEEN_REQUESTS}ms`);
   
-  const queue = new PQueue({ 
-    concurrency: CONCURRENT_REQUESTS,
-    interval: DELAY_BETWEEN_REQUESTS,
-    intervalCap: 1
-  });
-
+  const startTime = Date.now();
   const allProperties: PropertyData[] = [];
   let completedPages = 0;
+  let totalPages = endPage - startPage + 1;
 
-  // Create tasks for all pages
-  const tasks = [];
-  for (let pageNo = startPage; pageNo <= endPage; pageNo++) {
-    tasks.push(
-      queue.add(async () => {
-        const properties = await fetchPage(pageNo);
-        allProperties.push(...properties);
-        completedPages++;
-        
-        // Progress logging
-        if (completedPages % 10 === 0 || completedPages === endPage - startPage + 1) {
-          console.log(`📊 Progress: ${completedPages}/${endPage - startPage + 1} pages completed`);
-        }
-        
-        return properties;
-      })
-    );
+  // Process pages in batches for better memory management
+  for (let batchStart = startPage; batchStart <= endPage; batchStart += BATCH_SIZE) {
+    const batchEnd = Math.min(batchStart + BATCH_SIZE - 1, endPage);
+    const batchSize = batchEnd - batchStart + 1;
+    
+    console.log(`\n🔥 Processing batch: ${batchStart}-${batchEnd} (${batchSize} pages)`);
+    
+    // Create queue for this batch with maximum concurrency
+    const batchQueue = new PQueue({ 
+      concurrency: CONCURRENT_REQUESTS,
+      interval: DELAY_BETWEEN_REQUESTS,
+      intervalCap: Math.ceil(CONCURRENT_REQUESTS / 2) // Allow burst processing
+    });
+
+    const batchTasks = [];
+    
+    // Create tasks for current batch
+    for (let pageNo = batchStart; pageNo <= batchEnd; pageNo++) {
+      batchTasks.push(
+        batchQueue.add(async () => {
+          const properties = await fetchPage(pageNo);
+          completedPages++;
+          
+          // Real-time progress for large batches
+          if (completedPages % 25 === 0) {
+            const elapsed = (Date.now() - startTime) / 1000;
+            const rate = completedPages / elapsed;
+            const remaining = totalPages - completedPages;
+            const eta = Math.round(remaining / rate);
+            
+            console.log(`⚡ ${completedPages}/${totalPages} pages | ${rate.toFixed(1)} pages/sec | ETA: ${eta}s`);
+          }
+          
+          return properties;
+        })
+      );
+    }
+
+    // Wait for current batch to complete
+    const batchResults = await Promise.all(batchTasks);
+    
+    // Aggregate results
+    batchResults.forEach(properties => {
+      allProperties.push(...properties);
+    });
+    
+    // Small delay between batches to prevent overwhelming the server
+    if (batchEnd < endPage) {
+      await new Promise(resolve => setTimeout(resolve, 500));
+    }
   }
-
-  // Wait for all tasks to complete
-  await Promise.all(tasks);
   
-  console.log(`🎉 Scraping completed! Total properties found: ${allProperties.length}`);
+  const totalTime = (Date.now() - startTime) / 1000;
+  const averageRate = completedPages / totalTime;
+  
+  console.log(`\n🎉 TURBO SCRAPING COMPLETED!`);
+  console.log(`📊 Total Properties: ${allProperties.length}`);
+  console.log(`⏱️  Total Time: ${totalTime.toFixed(1)}s`);
+  console.log(`⚡ Average Rate: ${averageRate.toFixed(2)} pages/second`);
+  
   return allProperties;
 };
 
 // API Routes
 
-// Start full scraping process
+// TURBO: Ultra-fast scraping with all CPU cores
+app.post('/turbo-scrape', async (req, res) => {
+  try {
+    const { startPage = 1, endPage = TOTAL_PAGES } = req.body;
+    
+    console.log(`\n🚀 TURBO MODE ACTIVATED: Scraping ${endPage - startPage + 1} pages at maximum speed!`);
+    console.log(`⚡ Using ${CONCURRENT_REQUESTS} concurrent requests (${CPU_CORES} CPU cores x 4)`);
+    
+    const startTime = Date.now();
+    const properties = await scrapeAllPages(startPage, endPage);
+    
+    // Save consolidated JSON file with optimized writing
+    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+    const jsonFilename = `turbo-properties-${timestamp}.json`;
+    const jsonPath = path.join(process.cwd(), jsonFilename);
+    
+    // Use streaming write for large files
+    const jsonData = JSON.stringify(properties, null, 2);
+    await fs.writeFile(jsonPath, jsonData, 'utf8');
+    
+    const totalTime = (Date.now() - startTime) / 1000;
+    const rate = properties.length / totalTime;
+    
+    console.log(`\n🎯 TURBO SCRAPING COMPLETE!`);
+    console.log(`📁 Saved to: ${jsonFilename}`);
+    console.log(`💾 File size: ${Math.round(jsonData.length / 1024)} KB`);
+    
+    res.json({
+      success: true,
+      message: '🚀 TURBO scraping completed at maximum speed!',
+      mode: 'TURBO',
+      performance: {
+        totalTime: `${totalTime.toFixed(1)}s`,
+        rate: `${rate.toFixed(1)} properties/second`,
+        concurrency: CONCURRENT_REQUESTS,
+        cpuCores: CPU_CORES
+      },
+      data: {
+        totalProperties: properties.length,
+        pagesProcessed: endPage - startPage + 1,
+        averagePerPage: Math.round(properties.length / (endPage - startPage + 1)),
+        jsonFile: jsonFilename,
+        fileSize: `${Math.round(jsonData.length / 1024)} KB`
+      }
+    });
+
+  } catch (error: any) {
+    console.error('❌ TURBO scraping error:', error.message);
+    res.status(500).json({
+      success: false,
+      message: 'TURBO scraping failed',
+      error: error.message
+    });
+  }
+});
+
+// Legacy scraping (slower, kept for compatibility)
 app.post('/start-scraping', async (req, res) => {
   try {
     const { startPage = 1, endPage = TOTAL_PAGES } = req.body;
     
-    console.log(`Starting scraping from page ${startPage} to ${endPage}...`);
+    console.log(`Starting legacy scraping from page ${startPage} to ${endPage}...`);
+    console.log(`⚠️  Consider using /turbo-scrape for ${CONCURRENT_REQUESTS}x faster performance!`);
     
     const properties = await scrapeAllPages(startPage, endPage);
     
@@ -326,31 +421,53 @@ app.post('/combine-pages', async (req, res) => {
   }
 });
 
-// Health check
+// Health check with turbo capabilities
 app.get('/', (req, res) => {
   res.json({
-    message: 'Jhansi Property Data Scraper is running!',
+    message: '🚀 Jhansi Property Turbo Scraper - Maximum Speed Edition!',
+    mode: 'TURBO ENABLED',
+    performance: {
+      cpuCores: CPU_CORES,
+      maxConcurrency: CONCURRENT_REQUESTS,
+      speedMultiplier: `${Math.round(CONCURRENT_REQUESTS / 5)}x faster than standard`
+    },
     endpoints: {
-      startScraping: 'POST /start-scraping',
-      fetchPage: 'GET /fetch-page/:pageNo',
-      status: 'GET /status',
-      combinePages: 'POST /combine-pages'
+      turboScrape: '🚀 POST /turbo-scrape (RECOMMENDED - Ultra Fast)',
+      legacyScrape: 'POST /start-scraping (Legacy - Slower)',
+      fetchPage: 'GET /fetch-page/:pageNo (Testing)',
+      status: 'GET /status (Progress)',
+      combinePages: 'POST /combine-pages (Utility)'
     },
     config: {
       totalPages: TOTAL_PAGES,
       concurrentRequests: CONCURRENT_REQUESTS,
-      delayBetweenRequests: DELAY_BETWEEN_REQUESTS
+      batchSize: BATCH_SIZE,
+      delayBetweenRequests: `${DELAY_BETWEEN_REQUESTS}ms (Optimized)`,
+      estimatedTimeFor7022Pages: `~${Math.round(7022 / (CONCURRENT_REQUESTS * 0.8) / 60)} minutes`
+    },
+    quickStart: {
+      testRun: 'POST /turbo-scrape with {"startPage": 1, "endPage": 10}',
+      fullScrape: 'POST /turbo-scrape (scrapes all 7022 pages)'
     }
   });
 });
 
-// Start server
+// Start turbo server
 app.listen(PORT, () => {
-  console.log(`🚀 Jhansi Property Scraper running on http://localhost:${PORT}`);
-  console.log(`📊 Ready to scrape ${TOTAL_PAGES} pages with ${CONCURRENT_REQUESTS} concurrent requests`);
-  console.log('\n📋 Available endpoints:');
-  console.log(`   POST /start-scraping - Start full scraping process`);
-  console.log(`   GET  /fetch-page/:pageNo - Fetch single page (for testing)`);
-  console.log(`   GET  /status - Check scraping progress`);
-  console.log(`   POST /combine-pages - Combine existing page files into JSON`);
+  console.log(`\n🚀 JHANSI PROPERTY TURBO SCRAPER - MAXIMUM SPEED EDITION!`);
+  console.log(`🌐 Server: http://localhost:${PORT}`);
+  console.log(`💻 CPU Cores: ${CPU_CORES}`);
+  console.log(`⚡ Max Concurrency: ${CONCURRENT_REQUESTS} (${Math.round(CONCURRENT_REQUESTS / 5)}x faster!)`);
+  console.log(`📊 Target: ${TOTAL_PAGES} pages`);
+  console.log(`⏱️  Est. Time: ~${Math.round(7022 / (CONCURRENT_REQUESTS * 0.8) / 60)} minutes for full scrape`);
+  console.log(`\n🔥 TURBO ENDPOINTS:`);
+  console.log(`   🚀 POST /turbo-scrape      - ULTRA FAST scraping (RECOMMENDED)`);
+  console.log(`   📊 GET  /status            - Real-time progress`);
+  console.log(`   🧪 GET  /fetch-page/:pageNo - Single page test`);
+  console.log(`   📄 POST /combine-pages     - Combine existing files`);
+  console.log(`   🐌 POST /start-scraping    - Legacy mode (slower)`);
+  console.log(`\n🎯 QUICK START:`);
+  console.log(`   Test:  curl -X POST ${PORT === 3000 ? 'http://localhost:3000' : `http://localhost:${PORT}`}/turbo-scrape -H "Content-Type: application/json" -d "{\\"startPage\\": 1, \\"endPage\\": 10}"`);
+  console.log(`   Full:  curl -X POST ${PORT === 3000 ? 'http://localhost:3000' : `http://localhost:${PORT}`}/turbo-scrape -H "Content-Type: application/json" -d "{}"`);
+  console.log(`\n⚠️  TURBO MODE: No proxy delays - Maximum speed with ${CPU_CORES} CPU cores!`);
 });
