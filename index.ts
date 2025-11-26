@@ -271,10 +271,12 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
 // TURBO: Ultra-fast scraping with all CPU cores
 app.post('/turbo-scrape', async (req, res) => {
   try {
-    const { startPage = 1, endPage = TOTAL_PAGES } = req.body;
+    // Handle empty or null request body
+    const body = req.body || {};
+    const { startPage = 1, endPage = TOTAL_PAGES } = body;
     
-    console.log(`\n⚖️ BALANCED MODE ACTIVATED: Scraping ${endPage - startPage + 1} pages with smart rate limiting!`);
-    console.log(`🧠 Using ${CONCURRENT_REQUESTS} concurrent requests with adaptive scaling`);
+    console.log(`\n🔥 TURBO MODE ACTIVATED: Scraping ${endPage - startPage + 1} pages with aggressive concurrency!`);
+    console.log(`⚡ Using ${CONCURRENT_REQUESTS} concurrent requests with maximum speed`);
     
     const startTime = Date.now();
     const properties = await scrapeAllPages(startPage, endPage);
@@ -327,7 +329,9 @@ app.post('/turbo-scrape', async (req, res) => {
 // Legacy scraping (slower, kept for compatibility)
 app.post('/start-scraping', async (req, res) => {
   try {
-    const { startPage = 1, endPage = TOTAL_PAGES } = req.body;
+    // Handle empty or null request body
+    const body = req.body || {};
+    const { startPage = 1, endPage = TOTAL_PAGES } = body;
     
     console.log(`Starting legacy scraping from page ${startPage} to ${endPage}...`);
     console.log(`⚠️  Consider using /turbo-scrape for ${CONCURRENT_REQUESTS}x faster performance!`);
