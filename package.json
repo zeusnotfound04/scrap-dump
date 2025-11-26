@@ -1,0 +1,32 @@
+{
+  "name": "hard-gunman",
+  "module": "index.ts",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "start": "bun run index.ts",
+    "dev": "bun --watch index.ts",
+    "test": "bun run test-scraper.ts"
+  },
+  "devDependencies": {
+    "@types/bun": "latest"
+  },
+  "peerDependencies": {
+    "typescript": "^5"
+  },
+  "dependencies": {
+    "@types/express": "^5.0.5",
+    "@types/http-proxy-middleware": "^1.0.0",
+    "@types/node": "^24.10.1",
+    "axios": "^1.13.2",
+    "cheerio": "^1.1.2",
+    "express": "^5.1.0",
+    "fs": "^0.0.1-security",
+    "http-proxy-middleware": "^3.0.5",
+    "https-proxy-agent": "^7.0.6",
+    "p-limit": "^7.2.0",
+    "p-queue": "^9.0.1",
+    "piscina": "^5.1.4",
+    "socks-proxy-agent": "^8.0.5"
+  }
+}
