@@ -10,15 +10,20 @@ import os from 'os';
 const app = express();
 const PORT = 3000;
 
-// Configuration - Optimized for maximum speed
+// Configuration - Balanced for speed and reliability
 const TOTAL_PAGES = 7022;
 const CPU_CORES = os.cpus().length;
-const CONCURRENT_REQUESTS = CPU_CORES * 4; // Use 4x CPU cores for maximum throughput
-const DELAY_BETWEEN_REQUESTS = 100; // Minimal delay - 100ms
-const BATCH_SIZE = 50; // Process in batches
+
+// Intelligent concurrency based on server capacity
+const MAX_SAFE_CONCURRENT = Math.min(CPU_CORES * 2, 16); // Cap at 16 to prevent server overload
+const CONCURRENT_REQUESTS = CPU_CORES >= 8 ? 12 : Math.max(CPU_CORES, 6); // Smart scaling
+const DELAY_BETWEEN_REQUESTS = 200; // Balanced delay - 200ms
+const BATCH_SIZE = 25; // Smaller batches for stability
+const REQUEST_TIMEOUT = 15000; // Increased timeout - 15s
 const BASE_URL = 'https://www.jhansipropertytax.com/listName.php';
 
-console.log(`🚀 Detected ${CPU_CORES} CPU cores, using ${CONCURRENT_REQUESTS} concurrent requests`);
+console.log(`🚀 Detected ${CPU_CORES} CPU cores, using ${CONCURRENT_REQUESTS} concurrent requests (smart scaling)`);
+console.log(`⚖️ Balanced mode: Speed + Reliability (Max safe: ${MAX_SAFE_CONCURRENT})`);
 
 // Interface for property data
 interface PropertyData {
@@ -121,9 +126,12 @@ const fetchPage = async (pageNo: number, retryCount = 0): Promise<PropertyData[]
     
     const axiosConfig = {
       headers: getHeaders(),
-      timeout: 8000, // Reduced timeout for speed
+      timeout: REQUEST_TIMEOUT, // Increased timeout for reliability
       maxRedirects: 3,
-      validateStatus: (status: number) => status < 400
+      validateStatus: (status: number) => status < 400,
+      // Add connection pooling for better performance
+      maxContentLength: Infinity,
+      maxBodyLength: Infinity
     };
 
     const response = await axios.get(url, axiosConfig);
@@ -146,15 +154,18 @@ const fetchPage = async (pageNo: number, retryCount = 0): Promise<PropertyData[]
     return properties;
 
   } catch (error: any) {
-    console.error(`✗ Error fetching page ${pageNo}: ${error.message}`);
+    const errorType = error.code || error.message;
+    console.error(`✗ Error fetching page ${pageNo}: ${errorType}`);
     
-    // Retry up to 3 times
+    // Retry up to 3 times with exponential backoff
     if (retryCount < 3) {
-      console.log(`Retrying page ${pageNo} (attempt ${retryCount + 1}/3)...`);
-      await new Promise(resolve => setTimeout(resolve, 2000 * (retryCount + 1)));
+      const backoffDelay = Math.min(2000 * Math.pow(2, retryCount), 10000); // Max 10s
+      console.log(`🔄 Retrying page ${pageNo} in ${backoffDelay}ms (attempt ${retryCount + 1}/3)...`);
+      await new Promise(resolve => setTimeout(resolve, backoffDelay));
       return fetchPage(pageNo, retryCount + 1);
     }
     
+    console.warn(`⚠️ Gave up on page ${pageNo} after 3 attempts`);
     return []; // Return empty array if all retries fail
   }
 };
@@ -169,18 +180,28 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
   let completedPages = 0;
   let totalPages = endPage - startPage + 1;
 
-  // Process pages in batches for better memory management
+  let currentConcurrency = CONCURRENT_REQUESTS;
+  let failureCount = 0;
+  
+  // Process pages in batches with adaptive concurrency
   for (let batchStart = startPage; batchStart <= endPage; batchStart += BATCH_SIZE) {
     const batchEnd = Math.min(batchStart + BATCH_SIZE - 1, endPage);
     const batchSize = batchEnd - batchStart + 1;
     
-    console.log(`\n🔥 Processing batch: ${batchStart}-${batchEnd} (${batchSize} pages)`);
+    // Adaptive concurrency based on failure rate
+    if (failureCount > 10) {
+      currentConcurrency = Math.max(3, Math.floor(currentConcurrency * 0.7));
+      console.log(`🔧 Reducing concurrency to ${currentConcurrency} due to failures`);
+      failureCount = 0;
+    }
     
-    // Create queue for this batch with maximum concurrency
+    console.log(`\n🔥 Batch ${Math.floor(batchStart/BATCH_SIZE) + 1}: ${batchStart}-${batchEnd} (${batchSize} pages) [${currentConcurrency} concurrent]`);
+    
+    // Create queue for this batch with adaptive concurrency
     const batchQueue = new PQueue({ 
-      concurrency: CONCURRENT_REQUESTS,
+      concurrency: currentConcurrency,
       interval: DELAY_BETWEEN_REQUESTS,
-      intervalCap: Math.ceil(CONCURRENT_REQUESTS / 2) // Allow burst processing
+      intervalCap: 1 // Steady processing to prevent overload
     });
 
     const batchTasks = [];
@@ -190,16 +211,22 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
       batchTasks.push(
         batchQueue.add(async () => {
           const properties = await fetchPage(pageNo);
+          
+          if (properties.length === 0) {
+            failureCount++;
+          }
+          
           completedPages++;
           
-          // Real-time progress for large batches
+          // Real-time progress with success rate
           if (completedPages % 25 === 0) {
             const elapsed = (Date.now() - startTime) / 1000;
             const rate = completedPages / elapsed;
             const remaining = totalPages - completedPages;
             const eta = Math.round(remaining / rate);
+            const successRate = ((completedPages - failureCount) / completedPages * 100).toFixed(1);
             
-            console.log(`⚡ ${completedPages}/${totalPages} pages | ${rate.toFixed(1)} pages/sec | ETA: ${eta}s`);
+            console.log(`⚡ ${completedPages}/${totalPages} pages | ${rate.toFixed(1)}/sec | Success: ${successRate}% | ETA: ${eta}s`);
           }
           
           return properties;
@@ -215,19 +242,24 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
       allProperties.push(...properties);
     });
     
-    // Small delay between batches to prevent overwhelming the server
+    // Adaptive delay between batches based on performance
     if (batchEnd < endPage) {
-      await new Promise(resolve => setTimeout(resolve, 500));
+      const batchDelay = failureCount > 5 ? 2000 : 1000; // Longer delay if many failures
+      console.log(`⏸️ Batch complete. Pausing ${batchDelay}ms before next batch...`);
+      await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
   }
   
   const totalTime = (Date.now() - startTime) / 1000;
   const averageRate = completedPages / totalTime;
+  const successRate = ((completedPages - failureCount) / completedPages * 100).toFixed(1);
   
-  console.log(`\n🎉 TURBO SCRAPING COMPLETED!`);
+  console.log(`\n🎉 BALANCED SCRAPING COMPLETED!`);
   console.log(`📊 Total Properties: ${allProperties.length}`);
+  console.log(`📈 Success Rate: ${successRate}% (${completedPages - failureCount}/${completedPages} pages)`);
   console.log(`⏱️  Total Time: ${totalTime.toFixed(1)}s`);
   console.log(`⚡ Average Rate: ${averageRate.toFixed(2)} pages/second`);
+  console.log(`🎯 Final Concurrency: ${currentConcurrency}`);
   
   return allProperties;
 };
@@ -239,8 +271,8 @@ app.post('/turbo-scrape', async (req, res) => {
   try {
     const { startPage = 1, endPage = TOTAL_PAGES } = req.body;
     
-    console.log(`\n🚀 TURBO MODE ACTIVATED: Scraping ${endPage - startPage + 1} pages at maximum speed!`);
-    console.log(`⚡ Using ${CONCURRENT_REQUESTS} concurrent requests (${CPU_CORES} CPU cores x 4)`);
+    console.log(`\n⚖️ BALANCED MODE ACTIVATED: Scraping ${endPage - startPage + 1} pages with smart rate limiting!`);
+    console.log(`🧠 Using ${CONCURRENT_REQUESTS} concurrent requests with adaptive scaling`);
     
     const startTime = Date.now();
     const properties = await scrapeAllPages(startPage, endPage);
@@ -263,8 +295,8 @@ app.post('/turbo-scrape', async (req, res) => {
     
     res.json({
       success: true,
-      message: '🚀 TURBO scraping completed at maximum speed!',
-      mode: 'TURBO',
+      message: '⚖️ BALANCED scraping completed with optimal speed + reliability!',
+      mode: 'BALANCED',
       performance: {
         totalTime: `${totalTime.toFixed(1)}s`,
         rate: `${rate.toFixed(1)} properties/second`,
@@ -284,7 +316,7 @@ app.post('/turbo-scrape', async (req, res) => {
     console.error('❌ TURBO scraping error:', error.message);
     res.status(500).json({
       success: false,
-      message: 'TURBO scraping failed',
+      message: 'Balanced scraping failed',
       error: error.message
     });
   }
@@ -424,15 +456,15 @@ app.post('/combine-pages', async (req, res) => {
 // Health check with turbo capabilities
 app.get('/', (req, res) => {
   res.json({
-    message: '🚀 Jhansi Property Turbo Scraper - Maximum Speed Edition!',
-    mode: 'TURBO ENABLED',
+    message: '⚖️ Jhansi Property Balanced Scraper - Speed + Reliability Edition!',
+    mode: 'BALANCED ENABLED',
     performance: {
       cpuCores: CPU_CORES,
       maxConcurrency: CONCURRENT_REQUESTS,
-      speedMultiplier: `${Math.round(CONCURRENT_REQUESTS / 5)}x faster than standard`
+      speedMultiplier: `Smart scaling with ${CONCURRENT_REQUESTS} concurrent requests`
     },
     endpoints: {
-      turboScrape: '🚀 POST /turbo-scrape (RECOMMENDED - Ultra Fast)',
+      balancedScrape: '⚖️ POST /turbo-scrape (RECOMMENDED - Balanced Fast)',
       legacyScrape: 'POST /start-scraping (Legacy - Slower)',
       fetchPage: 'GET /fetch-page/:pageNo (Testing)',
       status: 'GET /status (Progress)',
@@ -443,7 +475,7 @@ app.get('/', (req, res) => {
       concurrentRequests: CONCURRENT_REQUESTS,
       batchSize: BATCH_SIZE,
       delayBetweenRequests: `${DELAY_BETWEEN_REQUESTS}ms (Optimized)`,
-      estimatedTimeFor7022Pages: `~${Math.round(7022 / (CONCURRENT_REQUESTS * 0.8) / 60)} minutes`
+      estimatedTimeFor7022Pages: `~${Math.round(7022 / (CONCURRENT_REQUESTS * 0.6) / 60)} minutes (with reliability)`
     },
     quickStart: {
       testRun: 'POST /turbo-scrape with {"startPage": 1, "endPage": 10}',

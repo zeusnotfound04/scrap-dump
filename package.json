@@ -6,7 +6,8 @@
   "scripts": {
     "start": "bun run index.ts",
     "dev": "bun --watch index.ts",
-    "test": "bun run test-scraper.ts"
+    "test": "bun run test-scraper.ts",
+    "turbo-test": "bun run turbo-test.ts"
   },
   "devDependencies": {
     "@types/bun": "latest"
