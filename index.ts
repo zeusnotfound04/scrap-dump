@@ -14,16 +14,16 @@ const PORT = 3000;
 const TOTAL_PAGES = 7022;
 const CPU_CORES = os.cpus().length;
 
-// Intelligent concurrency based on server capacity
-const MAX_SAFE_CONCURRENT = Math.min(CPU_CORES * 2, 16); // Cap at 16 to prevent server overload
-const CONCURRENT_REQUESTS = CPU_CORES >= 8 ? 12 : Math.max(CPU_CORES, 6); // Smart scaling
-const DELAY_BETWEEN_REQUESTS = 200; // Balanced delay - 200ms
-const BATCH_SIZE = 25; // Smaller batches for stability
+// AGGRESSIVE concurrency for maximum speed
+const MAX_SAFE_CONCURRENT = CPU_CORES * 5; // Much more aggressive
+const CONCURRENT_REQUESTS = CPU_CORES >= 8 ? 20 : Math.max(CPU_CORES * 3, 12); // Much more aggressive
+const DELAY_BETWEEN_REQUESTS = 50; // Minimal delay - 50ms
+const BATCH_SIZE = 50; // Larger batches for speed
 const REQUEST_TIMEOUT = 15000; // Increased timeout - 15s
 const BASE_URL = 'https://www.jhansipropertytax.com/listName.php';
 
-console.log(`🚀 Detected ${CPU_CORES} CPU cores, using ${CONCURRENT_REQUESTS} concurrent requests (smart scaling)`);
-console.log(`⚖️ Balanced mode: Speed + Reliability (Max safe: ${MAX_SAFE_CONCURRENT})`);
+console.log(`🚀 Detected ${CPU_CORES} CPU cores, using ${CONCURRENT_REQUESTS} concurrent requests (AGGRESSIVE MODE)`);
+console.log(`🔥 TURBO mode: Maximum Speed (Max concurrent: ${MAX_SAFE_CONCURRENT})`);
 
 // Interface for property data
 interface PropertyData {
@@ -199,9 +199,8 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
     
     // Create queue for this batch with adaptive concurrency
     const batchQueue = new PQueue({ 
-      concurrency: currentConcurrency,
-      interval: DELAY_BETWEEN_REQUESTS,
-      intervalCap: 1 // Steady processing to prevent overload
+      concurrency: currentConcurrency
+      // Remove interval and intervalCap - they cause hangs
     });
 
     const batchTasks = [];
@@ -210,6 +209,9 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
     for (let pageNo = batchStart; pageNo <= batchEnd; pageNo++) {
       batchTasks.push(
         batchQueue.add(async () => {
+          // Manual delay to replace PQueue interval
+          await new Promise(resolve => setTimeout(resolve, DELAY_BETWEEN_REQUESTS));
+          
           const properties = await fetchPage(pageNo);
           
           if (properties.length === 0) {
@@ -242,9 +244,9 @@ const scrapeAllPages = async (startPage = 1, endPage = TOTAL_PAGES): Promise<Pro
       allProperties.push(...properties);
     });
     
-    // Adaptive delay between batches based on performance
+    // Shorter delay between batches since we have manual delays in tasks
     if (batchEnd < endPage) {
-      const batchDelay = failureCount > 5 ? 2000 : 1000; // Longer delay if many failures
+      const batchDelay = failureCount > 5 ? 1000 : 300; // Much shorter delays
       console.log(`⏸️ Batch complete. Pausing ${batchDelay}ms before next batch...`);
       await new Promise(resolve => setTimeout(resolve, batchDelay));
     }
